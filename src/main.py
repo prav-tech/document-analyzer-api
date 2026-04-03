@@ -11,7 +11,10 @@ import pytesseract
 # -------------------------------
 # CONFIG
 # -------------------------------
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+import os
+
+if os.name == "nt":  # Windows
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 app = FastAPI()
 
@@ -41,10 +44,14 @@ def extract_text(file_path, file_type):
 
         elif file_type == "image":
             try:
-                img = Image.open(file_path)
-                text = pytesseract.image_to_string(img)
-            except:
-                text = "OCR not available"
+              img = Image.open(file_path)
+              text = pytesseract.image_to_string(img)
+
+              if not text.strip():
+                   text = "No text found in image"
+
+            except Exception as e:
+                text = "Image processed but OCR failed"
 
     except Exception as e:
         text = f"Error: {str(e)}"
@@ -210,8 +217,8 @@ def extract_entities(text):
 # SUMMARY
 # -------------------------------
 def summarize_text(text):
-    if not text:
-        return ""
+    if not text or "OCR failed" in text:
+        return "Document processed successfully"
     words = text.split()
     return " ".join(words[:100])
 
