@@ -44,17 +44,37 @@ def extract_text(file_path, file_type):
 
         elif file_type == "image":
             try:
-              img = Image.open(file_path)
-              text = pytesseract.image_to_string(img)
+                import numpy as np
 
-              if not text.strip():
-                   text = "No text found in image"
+                img = Image.open(file_path)
+
+                # Convert to grayscale
+                img = img.convert('L')
+
+                # Convert to numpy array
+                img_np = np.array(img)
+
+                # Apply threshold (improves OCR)
+                img_np = (img_np > 150) * 255
+                img = Image.fromarray(img_np.astype('uint8'))
+
+                # OCR with better config
+                text = pytesseract.image_to_string(
+                    img,
+                    config='--oem 3 --psm 6'
+                )
+
+                # Clean text
+                text = text.strip()
+
+                if not text:
+                    text = "No text found in image"
 
             except Exception as e:
-                text = "Image processed but OCR failed"
+                text = f"Error processing image: {str(e)}"
 
     except Exception as e:
-        text = f"Error: {str(e)}"
+        text = f"Error extracting text: {str(e)}"
 
     return text
 
@@ -217,8 +237,8 @@ def extract_entities(text):
 # SUMMARY
 # -------------------------------
 def summarize_text(text):
-    if not text or "OCR failed" in text:
-        return "Document processed successfully"
+    if not text:
+        return ""
     words = text.split()
     return " ".join(words[:100])
 

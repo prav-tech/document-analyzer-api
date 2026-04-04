@@ -3,4 +3,4 @@ uvicorn
 pytesseract
 pillow
 python-docx
-pymupdf
+numpy
