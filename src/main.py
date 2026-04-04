@@ -201,29 +201,32 @@ def home():
     return {"message": "API is working 🚀"}
 
 @app.post("/api/document-analyze")
-def analyze_api(request: DocumentRequest = Body(...), x_api_key: str = Header(None)):
+async def analyze_api(request: dict):
+    try:
+        file_name = request.get("fileName")
+        file_type = request.get("fileType")
+        file_base64 = request.get("fileBase64")
 
-    API_KEY = os.getenv("API_KEY", "default_key")
+        if not file_base64:
+            return {"error": "No file data provided"}
 
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        import base64
+        file_bytes = base64.b64decode(file_base64)
 
-     # FAST RESPONSE (for hackathon test)
-        text = "Sample extracted text"
+        try:
+            extracted_text = file_bytes.decode("utf-8", errors="ignore")
+        except:
+            extracted_text = "Could not decode text"
 
-        result = {   
-             "status": "success",
-             "fileName": request.fileName,
-             "summary": text[:150],
-             "entities": {
-                "names": [],
-                "dates": [],
-                "organizations": [],
-                "amounts": [],
-               "locations": []
-                   },
-           "sentiment": "Neutral"
+        summary = extracted_text[:100] if extracted_text else "No content"
+
+        return {
+            "file_name": file_name,
+            "file_type": file_type,
+            "extracted_text": extracted_text,
+            "summary": summary
         }
-        return result
 
+    except Exception as e:
+        return {"error": str(e)}
     
