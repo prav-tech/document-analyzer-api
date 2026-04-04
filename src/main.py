@@ -11,6 +11,7 @@ from docx import Document
 from PIL import Image, ImageFilter, ImageEnhance
 import pytesseract
 import numpy as np
+from fastapi.middleware.cors import CORSMiddleware
 
 
 # -------------------------------
@@ -20,6 +21,13 @@ if os.name == "nt":
     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # -------------------------------
 # REQUEST MODEL
