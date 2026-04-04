@@ -1,6 +1,9 @@
 fastapi
 uvicorn
-pytesseract
-pillow
+pydantic
+python-dotenv
+PyMuPDF
 python-docx
+Pillow
+pytesseract
 numpy

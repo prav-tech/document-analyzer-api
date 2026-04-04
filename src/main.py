@@ -1,18 +1,18 @@
 import re
 import base64
-import json
+import os
+import tempfile
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 import fitz
 from docx import Document
-from PIL import Image
+from PIL import Image, ImageFilter, ImageEnhance
 import pytesseract
+import numpy as np
 
 # -------------------------------
 # CONFIG
 # -------------------------------
-import os
-
 if os.name == "nt":  # Windows
     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
@@ -41,20 +41,42 @@ def extract_text(file_path, file_type):
             doc = Document(file_path)
             for para in doc.paragraphs:
                 text += para.text + "\n"
+            # Also extract tables
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        text += cell.text + " "
+                text += "\n"
 
         elif file_type == "image":
             try:
-                import numpy as np
-
                 img = Image.open(file_path)
+
+                # Convert to RGB first if needed (handles PNG transparency etc.)
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
 
                 # Convert to grayscale
                 img = img.convert('L')
 
-                # Convert to numpy array
-                img_np = np.array(img)
+                # Resize if image is too small (improves OCR accuracy)
+                width, height = img.size
+                if width < 1000:
+                    scale = 1000 / width
+                    img = img.resize(
+                        (int(width * scale), int(height * scale)),
+                        Image.LANCZOS
+                    )
 
-                # Apply threshold (improves OCR)
+                # Enhance contrast before thresholding
+                enhancer = ImageEnhance.Contrast(img)
+                img = enhancer.enhance(2.0)
+
+                # Sharpen the image
+                img = img.filter(ImageFilter.SHARPEN)
+
+                # Convert to numpy array and apply threshold
+                img_np = np.array(img)
                 img_np = (img_np > 150) * 255
                 img = Image.fromarray(img_np.astype('uint8'))
 
@@ -66,6 +88,13 @@ def extract_text(file_path, file_type):
 
                 # Clean text
                 text = text.strip()
+
+                if not text:
+                    # Try again with different psm mode
+                    text = pytesseract.image_to_string(
+                        img,
+                        config='--oem 3 --psm 3'
+                    ).strip()
 
                 if not text:
                     text = "No text found in image"
@@ -82,14 +111,24 @@ def extract_text(file_path, file_type):
 # SENTIMENT
 # -------------------------------
 def get_sentiment(text):
-    positive = {"good", "excellent", "profit", "success", "approved", "paid", "great"}
-    negative = {"loss", "failed", "rejected", "overdue", "penalty", "dispute", "unpaid"}
+    positive = {
+        "good", "excellent", "profit", "success", "approved", "paid",
+        "great", "outstanding", "achieved", "positive", "increase",
+        "growth", "benefit", "award", "congratulations", "happy"
+    }
+    negative = {
+        "loss", "failed", "rejected", "overdue", "penalty", "dispute",
+        "unpaid", "error", "issue", "problem", "delay", "cancel",
+        "terminate", "complaint", "violation", "damage"
+    }
 
     words = set(text.lower().split())
+    pos_count = len(words & positive)
+    neg_count = len(words & negative)
 
-    if len(words & positive) > len(words & negative):
+    if pos_count > neg_count:
         return "Positive"
-    elif len(words & negative) > len(words & positive):
+    elif neg_count > pos_count:
         return "Negative"
     else:
         return "Neutral"
@@ -140,7 +179,7 @@ def extract_entities(text):
         "Project Manager", "Full Stack Developer", "DevOps Engineer"
     ]
 
-    # 👤 NAMES
+    # NAMES
     name_pattern = re.findall(
         r'\b([A-Z][a-z]+\s[A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\b',
         clean_text
@@ -164,17 +203,18 @@ def extract_entities(text):
 
     entities["names"] = list(set(filtered_names))
 
-    # 📅 DATES
+    # DATES
     dates = re.findall(
         r'\b(?:\d{1,2}\s)?(?:January|February|March|April|May|June|July|'
         r'August|September|October|November|December)\s\d{4}'
-        r'|\d{4}\s?[-–]\s?(?:\d{4}|Present)'
-        r'|\bGraduated[:\s]+\d{4}\b',
+        r'|\d{4}\s?[-\u2013]\s?(?:\d{4}|Present)'
+        r'|\bGraduated[:\s]+\d{4}\b'
+        r'|\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b',
         clean_text
     )
     entities["dates"] = list(set(dates))
 
-    # 🏢 ORGANIZATIONS
+    # ORGANIZATIONS
     orgs = re.findall(
         r'\b[A-Z][A-Za-z\s]*(?:Pvt\.?\s?Ltd\.?|Ltd\.?|Inc\.?|Corp\.?|'
         r'LLP|LLC|University|Company|Agency|Media|School of \w+)\b',
@@ -182,15 +222,15 @@ def extract_entities(text):
     )
     entities["organizations"] = list(set(orgs))
 
-    # 💰 AMOUNTS
+    # AMOUNTS
     amounts = re.findall(
-        r'(?:₹|Rs\.?|\$|€)\s?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?'
+        r'(?:\u20b9|Rs\.?|\$|\u20ac|\u00a3)\s?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?'
         r'|\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?',
         clean_text
     )
     entities["amounts"] = list(set(a.strip() for a in amounts if a.strip()))
 
-    # 📍 LOCATIONS
+    # LOCATIONS
     detected = [loc for loc in known_locations if loc in clean_text]
     pins = re.findall(r'\b[1-9][0-9]{5}\b', clean_text)
     city_state = re.findall(r'\b[A-Z][a-z]+,\s[A-Z]{2}\b', clean_text)
@@ -198,21 +238,21 @@ def extract_entities(text):
         detected + city_state + [f"PIN: {p}" for p in pins]
     ))
 
-    # 📧 EMAILS
+    # EMAILS
     emails = re.findall(
         r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
         clean_text
     )
     entities["emails"] = list(set(emails))
 
-    # 📞 PHONES
+    # PHONES
     phones = re.findall(
         r'(?:\+?\d{1,3}[\s\-]?)?(?:\(?\d{3}\)?[\s\-]?)?\d{3}[\s\-]?\d{4}',
         clean_text
     )
     entities["phones"] = list(set(phones))
 
-    # 🌐 WEBSITES
+    # WEBSITES
     websites = re.findall(
         r'\b(?:https?://)?(?:www\.)?[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/\S*)?\b',
         clean_text
@@ -221,12 +261,12 @@ def extract_entities(text):
         [w for w in websites if "@" not in w and "." in w]
     ))
 
-    # 🛠 SKILLS
+    # SKILLS
     entities["skills"] = list(set(
         [skill for skill in known_skills if skill in clean_text]
     ))
 
-    # 💼 DESIGNATIONS
+    # DESIGNATIONS
     entities["designations"] = list(set(
         [d for d in known_designations if d in clean_text]
     ))
@@ -239,6 +279,8 @@ def extract_entities(text):
 def summarize_text(text):
     if not text:
         return ""
+    # Clean extra whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
     words = text.split()
     return " ".join(words[:100])
 
@@ -250,7 +292,7 @@ def analyze_document(file_name, text):
     sentiment = get_sentiment(text)
     summary = summarize_text(text)
 
-    # 🔥 remove empty fields
+    # Remove empty fields
     clean_entities = {k: v for k, v in entities.items() if v}
 
     return {
@@ -258,11 +300,11 @@ def analyze_document(file_name, text):
         "fileName": file_name,
         "summary": summary,
         "entities": {
-        "names": clean_entities.get("names", []),
-        "dates": clean_entities.get("dates", []),
-        "organizations": clean_entities.get("organizations", []),
-        "amounts": clean_entities.get("amounts", []),
-        "locations": clean_entities.get("locations", [])
+            "names": clean_entities.get("names", []),
+            "dates": clean_entities.get("dates", []),
+            "organizations": clean_entities.get("organizations", []),
+            "amounts": clean_entities.get("amounts", []),
+            "locations": clean_entities.get("locations", [])
         },
         "sentiment": sentiment
     }
@@ -283,14 +325,25 @@ def analyze_api(request: DocumentRequest, x_api_key: str = Header(None)):
     try:
         file_data = base64.b64decode(request.fileBase64)
 
-        file_path = f"temp_{request.fileName}"
-        with open(file_path, "wb") as f:
-            f.write(file_data)
+        # Use temp file instead of saving permanently
+        suffix_map = {"pdf": ".pdf", "docx": ".docx", "image": ".png"}
+        suffix = suffix_map.get(request.fileType, ".tmp")
 
-        text = extract_text(file_path, request.fileType)
-        result = analyze_document(request.fileName, text)
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(file_data)
+            file_path = tmp.name
+
+        try:
+            text = extract_text(file_path, request.fileType)
+            result = analyze_document(request.fileName, text)
+        finally:
+            # Always clean up temp file
+            if os.path.exists(file_path):
+                os.remove(file_path)
 
         return result
 
+    except HTTPException:
+        raise
     except Exception as e:
         return {"status": "error", "message": str(e)}
