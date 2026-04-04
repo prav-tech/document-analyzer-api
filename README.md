@@ -15,6 +15,22 @@ The system accepts files in Base64 format, decodes them, extracts content using 
 * **AI/NLP:** Basic NLP techniques for summarization and sentiment analysis
 
 ---
+## 🏗️ Architecture Overview
+
+The system follows a simple API-based architecture:
+
+Client (Postman / Swagger)
+        ↓
+FastAPI Backend (Render)
+        ↓
+Document Processing Layer
+        ↓
+Text Extraction (PDF/DOCX/OCR)
+        ↓
+NLP Analysis (Summary, Entities, Sentiment)
+        ↓
+JSON Response
+
 ## 🛠️ Setup Instructions
 
 1. **Clone the repository**
@@ -129,6 +145,20 @@ Content-Type: application/json
 ✅ API working
 ✅ Deployed on Render
 ✅ Tested using Postman & Swagger
+
+## 🤖 AI Tools Used
+
+- OCR: Tesseract (for image text extraction)
+- NLP: Basic rule-based and text processing techniques
+- AI Assistance: ChatGPT (for debugging, guidance, and optimization)
+
+## ⚠️ Known Limitations
+
+- Entity extraction may not always detect all entities accurately
+- Sentiment analysis is basic and may not reflect deep context
+- OCR accuracy depends on image quality
+- Large files may take longer to process
+- No frontend UI (API-based interaction only)
 
 ## 👩‍💻 Author
 Pravallika B
