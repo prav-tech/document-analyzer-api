@@ -4,7 +4,7 @@ import re
 import base64
 import os
 import tempfile
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Body
 from pydantic import BaseModel
 import fitz
 from docx import Document
@@ -12,6 +12,7 @@ from PIL import Image, ImageFilter, ImageEnhance
 import pytesseract
 import numpy as np
 from fastapi.middleware.cors import CORSMiddleware
+
 
 
 # -------------------------------
@@ -200,7 +201,7 @@ def home():
     return {"message": "API is working 🚀"}
 
 @app.post("/api/document-analyze")
-def analyze_api(request: DocumentRequest, x_api_key: str = Header(None)):
+def analyze_api(request: DocumentRequest = Body(...), x_api_key: str = Header(None)):
 
     API_KEY = os.getenv("API_KEY", "default_key")
 
