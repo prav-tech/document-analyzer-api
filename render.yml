@@ -1,11 +1,11 @@
 services:
   - type: web
-    name: document-analyzer-api
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn src.main:app --host 0.0.0.0 --port $PORT
+    name: document-analyzer
+    env: python
+    buildCommand: |
+      apt-get update && apt-get install -y tesseract-ocr
+      pip install -r requirements.txt
+    startCommand: uvicorn src.main:app --host 0.0.0.0 --port 10000
     envVars:
-      - key: API_KEY
-        value: sk_track2_987654321
-      - key: ANTHROPIC_API_KEY
-        sync: false
+      - key: PYTHON_VERSION
+        value: 3.10

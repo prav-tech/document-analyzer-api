@@ -1,9 +1,12 @@
 fastapi
 uvicorn
 pydantic
-python-dotenv
-PyMuPDF
+python-multipart
+pymupdf
 python-docx
-Pillow
+pillow
 pytesseract
 numpy
+spacy
+transformers
+torch
