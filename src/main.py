@@ -1,19 +1,20 @@
 from dotenv import load_dotenv
 load_dotenv()
+
 import re
 import base64
 import os
-import tempfile
-from fastapi import FastAPI, Header, HTTPException, Body
+import io
+
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+
 import fitz
 from docx import Document
 from PIL import Image, ImageFilter, ImageEnhance
 import pytesseract
 import numpy as np
-from fastapi.middleware.cors import CORSMiddleware
-
-
 
 # -------------------------------
 # CONFIG
@@ -39,16 +40,14 @@ class DocumentRequest(BaseModel):
     fileBase64: str
 
 # -------------------------------
-# LOAD MODELS (SAFE)
+# OPTIONAL MODELS
 # -------------------------------
-# spaCy
 try:
     import spacy
     nlp = spacy.load("en_core_web_sm")
 except:
     nlp = None
 
-# Transformers summarizer
 try:
     from transformers import pipeline
     summarizer = pipeline("summarization")
@@ -56,40 +55,52 @@ except:
     summarizer = None
 
 # -------------------------------
-# TEXT EXTRACTION
+# ROUTES
 # -------------------------------
-def extract_text(file_path, file_type):
-    text = ""
+@app.get("/")
+def home():
+    return {"message": "API is working 🚀"}
+
+@app.post("/api/document-analyze")
+def analyze_api(request: DocumentRequest, x_api_key: str = Header(None)):
+
+    if x_api_key != "mysecret123":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
     try:
+        file_data = base64.b64decode(request.fileBase64)
+        file_type = request.fileType.lower()
+
+        extracted_text = ""
+
+        # -------------------------------
+        # PDF
+        # -------------------------------
         if file_type == "pdf":
-            doc = fitz.open(file_path)
-            for page in doc:
-                text += page.get_text()
-
-        elif file_type == "docx":
-            doc = Document(file_path)
-            for para in doc.paragraphs:
-                text += para.text + "\n"
-            for table in doc.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        text += cell.text + " "
-                text += "\n"
-
-        elif file_type == "image":
             try:
-                img = Image.open(file_path)
+                doc = fitz.open(stream=file_data, filetype="pdf")
+                for page in doc:
+                    extracted_text += page.get_text()
+            except:
+                extracted_text = "Could not read PDF"
 
-                if img.mode != 'RGB':
-                    img = img.convert('RGB')
+        # -------------------------------
+        # DOCX
+        # -------------------------------
+        elif file_type == "docx":
+            try:
+                doc = Document(io.BytesIO(file_data))
+                for para in doc.paragraphs:
+                    extracted_text += para.text + "\n"
+            except:
+                extracted_text = "Could not read DOCX"
 
-                img = img.convert('L')
-
-                width, height = img.size
-                if width < 1000:
-                    scale = 1000 / width
-                    img = img.resize((int(width * scale), int(height * scale)), Image.LANCZOS)
-
+        # -------------------------------
+        # IMAGE (OCR)
+        # -------------------------------
+        elif file_type in ["png", "jpg", "jpeg"]:
+            try:
+                img = Image.open(io.BytesIO(file_data)).convert("L")
                 img = ImageEnhance.Contrast(img).enhance(2.0)
                 img = img.filter(ImageFilter.SHARPEN)
 
@@ -97,136 +108,85 @@ def extract_text(file_path, file_type):
                 img_np = (img_np > 150) * 255
                 img = Image.fromarray(img_np.astype('uint8'))
 
-                text = pytesseract.image_to_string(img, config='--oem 3 --psm 6').strip()
+                extracted_text = pytesseract.image_to_string(img).strip()
+            except:
+                extracted_text = "Could not read image"
 
-                if not text:
-                    text = pytesseract.image_to_string(img, config='--oem 3 --psm 3').strip()
+        # -------------------------------
+        # TEXT FALLBACK
+        # -------------------------------
+        else:
+            try:
+                extracted_text = file_data.decode("utf-8", errors="ignore")
+            except:
+                extracted_text = "Unsupported file type"
 
-                if not text:
-                    text = "No text found in image"
+        # -------------------------------
+        # SAFETY
+        # -------------------------------
+        if not extracted_text.strip():
+            extracted_text = "No readable content found"
 
-            except Exception as e:
-                text = f"Error processing image: {str(e)}"
+        # -------------------------------
+        # SUMMARY
+        # -------------------------------
+        if summarizer:
+            try:
+                result = summarizer(extracted_text[:1000], max_length=100, min_length=70)
+                summary = result[0]["summary_text"]
+            except:
+                summary = " ".join(extracted_text.split()[:80])
+        else:
+            summary = " ".join(extracted_text.split()[:80])
 
-    except Exception as e:
-        text = f"Error extracting text: {str(e)}"
+        # -------------------------------
+        # ENTITIES (basic fallback)
+        # -------------------------------
+        entities = []
+        for word in extracted_text.split():
+            if word.istitle():
+                entities.append(word)
 
-    return text
+        # -------------------------------
+        # SENTIMENT
+        # -------------------------------
+        sentiment = "neutral"
+        text_lower = extracted_text.lower()
 
-# -------------------------------
-# SENTIMENT
-# -------------------------------
-def get_sentiment(text):
-    positive = {"good","excellent","profit","success","approved","paid","great","happy"}
-    negative = {"loss","failed","rejected","error","issue","problem","delay"}
+        if any(w in text_lower for w in ["good", "great", "growth", "success", "innovation"]):
+            sentiment = "positive"
+        elif any(w in text_lower for w in ["bad", "loss", "decline"]):
+            sentiment = "negative"
 
-    words = set(text.lower().split())
-    pos = len(words & positive)
-    neg = len(words & negative)
+        # -------------------------------
+        # EXTRA FIELDS
+        # -------------------------------
+        names = list(set([w for w in extracted_text.split() if w.istitle()]))[:10]
+        dates = re.findall(r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b', extracted_text)
 
-    if pos > neg:
-        return "Positive"
-    elif neg > pos:
-        return "Negative"
-    return "Neutral"
+        org_keywords = ["Inc", "Ltd", "Corporation", "Company", "University", "Institute"]
+        organizations = []
+        for word in extracted_text.split():
+            for key in org_keywords:
+                if key in word:
+                    organizations.append(word)
 
-# -------------------------------
-# ENTITY EXTRACTION
-# -------------------------------
-def extract_entities(text):
-    entities = {
-        "names": [],
-        "dates": [],
-        "organizations": [],
-        "amounts": [],
-        "locations": []
-    }
+        amounts = re.findall(r'[\$₹]\d+(?:,\d+)*(?:\.\d+)?', extracted_text)
 
-    if nlp:
-        doc = nlp(text)
-        for ent in doc.ents:
-            if ent.label_ == "PERSON" and len(ent.text.split()) >= 2:
-                entities["names"].append(ent.text)
-            elif ent.label_ == "DATE":
-                entities["dates"].append(ent.text)
-            elif ent.label_ == "ORG" and ent.text.lower() != "html":
-                entities["organizations"].append(ent.text)
-            elif ent.label_ == "MONEY":
-                entities["amounts"].append(ent.text)
-            elif ent.label_ == "GPE":
-                entities["locations"].append(ent.text)
-
-    return {k: list(set(v)) for k, v in entities.items()}
-
-# -------------------------------
-# SUMMARY
-# -------------------------------
-def summarize_text(text):
-    if not text:
-        return ""
-
-    text = text[:1000]
-
-    if summarizer:
-        try:
-            result = summarizer(text, max_length=60, min_length=20, do_sample=False)
-            return result[0]['summary_text']
-        except:
-            pass
-
-    sentences = text.split(".")
-    return sentences[0] if sentences else text[:100]
-
-# -------------------------------
-# MAIN ANALYSIS
-# -------------------------------
-def analyze_document(file_name, text):
-    entities = extract_entities(text)
-    sentiment = get_sentiment(text)
-    summary = summarize_text(text)
-
-    return {
-        "status": "success",
-        "fileName": file_name,
-        "summary": summary,
-        "entities": entities,
-        "sentiment": sentiment
-    }
-
-# -------------------------------
-# API ROUTES
-# -------------------------------
-@app.get("/")
-def home():
-    return {"message": "API is working 🚀"}
-
-@app.post("/api/document-analyze")
-async def analyze_api(request: dict):
-    try:
-        file_name = request.get("fileName")
-        file_type = request.get("fileType")
-        file_base64 = request.get("fileBase64")
-
-        if not file_base64:
-            return {"error": "No file data provided"}
-
-        import base64
-        file_bytes = base64.b64decode(file_base64)
-
-        try:
-            extracted_text = file_bytes.decode("utf-8", errors="ignore")
-        except:
-            extracted_text = "Could not decode text"
-
-        summary = extracted_text[:100] if extracted_text else "No content"
-
+        # -------------------------------
+        # FINAL RESPONSE
+        # -------------------------------
         return {
-            "file_name": file_name,
-            "file_type": file_type,
-            "extracted_text": extracted_text,
-            "summary": summary
+            "status": "success",
+            "file_name": request.fileName,
+            "summary": summary,
+            "entities": list(set(entities))[:10],
+            "sentiment": sentiment,
+            "names": names,
+            "dates": dates,
+            "organizations": list(set(organizations)),
+            "amounts": amounts
         }
 
     except Exception as e:
-        return {"error": str(e)}
-    
+        return {"status": "error", "message": str(e)}
