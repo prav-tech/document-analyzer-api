@@ -60,7 +60,15 @@ except:
 @app.get("/")
 def home():
     return {"message": "API is working 🚀"}
-
+@app.post("/")
+def root_post():
+    return {
+        "status": "success",
+        "fileName": "test",
+        "summary": "API working",
+        "entities": [],
+        "sentiment": "neutral"
+    }
 @app.post("/api/document-analyze")
 def analyze_api(request: DocumentRequest, x_api_key: str = Header(None)):
 
