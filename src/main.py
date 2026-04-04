@@ -194,7 +194,7 @@ def home():
 @app.post("/api/document-analyze")
 def analyze_api(request: DocumentRequest, x_api_key: str = Header(None)):
 
-    API_KEY = os.getenv("API_KEY")
+    API_KEY = os.getenv("API_KEY", "default_key")
 
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
